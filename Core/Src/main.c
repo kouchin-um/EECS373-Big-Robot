@@ -84,7 +84,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
- I2C_HandleTypeDef hi2c1;
+I2C_HandleTypeDef hi2c1;
 
 UART_HandleTypeDef hlpuart1;
 
@@ -92,16 +92,16 @@ TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
+TIM_HandleTypeDef htim5;
 
 /* USER CODE BEGIN PV */
 uint16_t sensor_buf[6];
 GPIO_TypeDef* gpio_buf[6] = {GPIOF, GPIOE, GPIOF, GPIOD, GPIOD, GPIOE};
 uint16_t gpio_pin_buf[6] = {GPIO_PIN_14, GPIO_PIN_13, GPIO_PIN_15, GPIO_PIN_8, GPIO_PIN_9, GPIO_PIN_8};
 const int CENTER_POS = 2500;
-const int BASE_SPEED = 285;
+const int BASE_SPEED = 500;
 const uint16_t timeout = 2500; //microseconds
 uint16_t last_position_read = 0;
-
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -113,6 +113,7 @@ static void MX_I2C1_Init(void);
 static void MX_LPUART1_UART_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM4_Init(void);
+static void MX_TIM5_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -185,15 +186,19 @@ void aimMode() {
 		  if (largest_x < 3) {
 			  // Turn Left
 			  printf("Turn Left\n\r");
+			  // right
 			  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4,  0);	// PA4 = L
 			  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4,  1);	// PB4 = H
+			  // left
 			  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3,  1);	// PB3 = High
 			  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5,  0);	// PB5 = LOW
 		  }else if (largest_x > 4) {
 			  // Turn Right
 			  printf("Turn Right\n\r");
+			  // right
 			  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4,  1);	// PA4 = High
 			  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4,  0);	// PB4 = LOW
+			  // left
 			  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3,  0);	// PB3 = L
 			  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5,  1);	// PB5 = H
 		  }else {
@@ -235,27 +240,39 @@ void aimMode() {
 
 //set motors and turn motors do not work
 void set_motors(int left_speed, int right_speed) {
-  HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 0);
-  HAL_GPIO_WritePin(GPIOF, GPIO_PIN_12, 0);
-  TIM1->CCR1 = right_speed;
-  TIM2->CCR1 = left_speed;
+	// right
+	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4,  1);	// PA4 = High
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4,  0);	// PB4 = LOW
+	// left
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3,  1);	// PB3 = L
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5,  0);	// PB5 = H
+	__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, right_speed);
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, left_speed);
 }
 
 void turn_motors(int left_speed, int right_speed, char turn) {
   switch (turn) {
     case 'r':
-      HAL_GPIO_WritePin(GPIOF, GPIO_PIN_12, 0);  //left motor
-      HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 1);
+    // left
+    	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3,  1);
+    	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5,  0);
+    // right
+    	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4,  0);
+    	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4,  1);
       break;
     case 'l':
-      HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 0);
-      HAL_GPIO_WritePin(GPIOF, GPIO_PIN_12, 1);
+    // left
+    	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3,  0);
+    	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5,  1);
+    // right
+    	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4,  1);
+    	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4,  0);
       break;
     default:
       break;
   }
-  TIM1->CCR1 = right_speed;
-  TIM2->CCR1 = left_speed;
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, left_speed);
+  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, right_speed);
 }
 
 void pin_set_input(GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin) {
@@ -294,7 +311,7 @@ void read_reflectance_sensors(void) {
   setup_sensors();
   HAL_Delay(1);
   __HAL_RCC_TIM5_CLK_ENABLE();
-  TIM5->PSC = 3;
+  TIM5->PSC = 0;
   TIM5->CR1 = 1;
   uint32_t start_time = TIM5->CNT;
   uint16_t time = 0;
@@ -302,6 +319,7 @@ void read_reflectance_sensors(void) {
   while (time < timeout) {
     time = TIM5->CNT - start_time;
     for (uint8_t i = 0; i < 6; ++i) {
+    	GPIO_PinState p = HAL_GPIO_ReadPin(gpio_buf[i], gpio_pin_buf[i]);
       if ((HAL_GPIO_ReadPin(gpio_buf[i], gpio_pin_buf[i]) == 0) && (time < sensor_buf[i])) {
         sensor_buf[i] = time;
       }
@@ -377,6 +395,23 @@ void follow_line_big_robot() {
   }
 }
 
+void lineFollowingMode(){
+	while(1) {
+		follow_line_big_robot();
+		GPIO_PinState button = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13);
+		if (button == 1) {
+			// right
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4,  0);	// PA4
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4,  0);	// PB4
+			// left
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3,  0);	// PB3
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5,  0);	// PB5
+			HAL_Delay(500);
+			break;
+		}
+	}
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -412,6 +447,7 @@ int main(void)
   MX_LPUART1_UART_Init();
   MX_TIM3_Init();
   MX_TIM4_Init();
+  MX_TIM5_Init();
   /* USER CODE BEGIN 2 */
   // I2C initialization
   // enter normal mode
@@ -441,8 +477,10 @@ int main(void)
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);
+  // right
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4,  0);	// PA4
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4,  0);	// PB4
+  // left
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3,  0);	// PB3
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5,  0);	// PB5
 
@@ -464,16 +502,16 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    /*
 	  GPIO_PinState button = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13);
 	  if (button == 1) {
 		  HAL_Delay(500);
-		  aimMode();
-	  }*/
+		  //
+		  //aimMode();
+		  lineFollowingMode();
+	  }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
   }
   /* USER CODE END 3 */
 }
@@ -493,7 +531,6 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
@@ -506,7 +543,6 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-
   /** Initializes the CPU, AHB and APB buses clocks
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
@@ -550,14 +586,12 @@ static void MX_I2C1_Init(void)
   {
     Error_Handler();
   }
-
   /** Configure Analogue filter
   */
   if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
   {
     Error_Handler();
   }
-
   /** Configure Digital filter
   */
   if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK)
@@ -880,6 +914,64 @@ static void MX_TIM4_Init(void)
 }
 
 /**
+  * @brief TIM5 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM5_Init(void)
+{
+
+  /* USER CODE BEGIN TIM5_Init 0 */
+
+  /* USER CODE END TIM5_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_IC_InitTypeDef sConfigIC = {0};
+
+  /* USER CODE BEGIN TIM5_Init 1 */
+
+  /* USER CODE END TIM5_Init 1 */
+  htim5.Instance = TIM5;
+  htim5.Init.Prescaler = 0;
+  htim5.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim5.Init.Period = 4294967295;
+  htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim5) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim5, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_IC_Init(&htim5) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim5, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 0;
+  if (HAL_TIM_IC_ConfigChannel(&htim5, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM5_Init 2 */
+
+  /* USER CODE END TIM5_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -1147,3 +1239,4 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
+
