@@ -84,7 +84,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-I2C_HandleTypeDef hi2c1;
+ I2C_HandleTypeDef hi2c1;
 
 UART_HandleTypeDef hlpuart1;
 
@@ -94,6 +94,13 @@ TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 
 /* USER CODE BEGIN PV */
+uint16_t sensor_buf[6];
+GPIO_TypeDef* gpio_buf[6] = {GPIOF, GPIOE, GPIOF, GPIOD, GPIOD, GPIOE};
+uint16_t gpio_pin_buf[6] = {GPIO_PIN_14, GPIO_PIN_13, GPIO_PIN_15, GPIO_PIN_8, GPIO_PIN_9, GPIO_PIN_8};
+const int CENTER_POS = 2500;
+const int BASE_SPEED = 285;
+const uint16_t timeout = 2500; //microseconds
+uint16_t last_position_read = 0;
 
 /* USER CODE END PV */
 
@@ -226,6 +233,150 @@ void aimMode() {
 	}
 }
 
+//set motors and turn motors do not work
+void set_motors(int left_speed, int right_speed) {
+  HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 0);
+  HAL_GPIO_WritePin(GPIOF, GPIO_PIN_12, 0);
+  TIM1->CCR1 = right_speed;
+  TIM2->CCR1 = left_speed;
+}
+
+void turn_motors(int left_speed, int right_speed, char turn) {
+  switch (turn) {
+    case 'r':
+      HAL_GPIO_WritePin(GPIOF, GPIO_PIN_12, 0);  //left motor
+      HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 1);
+      break;
+    case 'l':
+      HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, 0);
+      HAL_GPIO_WritePin(GPIOF, GPIO_PIN_12, 1);
+      break;
+    default:
+      break;
+  }
+  TIM1->CCR1 = right_speed;
+  TIM2->CCR1 = left_speed;
+}
+
+void pin_set_input(GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin) {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitStruct.Pin = GPIO_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOx, &GPIO_InitStruct);
+}
+
+void pin_set_output(GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin) {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitStruct.Pin = GPIO_Pin;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOx, &GPIO_InitStruct);
+}
+
+void setup_sensors(void) {
+  for (uint8_t i = 0; i < 6; ++i) {
+    sensor_buf[i] = timeout;
+    pin_set_output(gpio_buf[i], gpio_pin_buf[i]);
+    HAL_GPIO_WritePin(gpio_buf[i], gpio_pin_buf[i], 1);
+  }
+}
+
+void set_sensors_input(void) {
+  for (uint8_t i = 0; i < 6; ++i) {
+    pin_set_input(gpio_buf[i], gpio_pin_buf[i]);
+  }
+}
+
+void read_reflectance_sensors(void) {
+  setup_sensors();
+  HAL_Delay(1);
+  __HAL_RCC_TIM5_CLK_ENABLE();
+  TIM5->PSC = 3;
+  TIM5->CR1 = 1;
+  uint32_t start_time = TIM5->CNT;
+  uint16_t time = 0;
+  set_sensors_input();
+  while (time < timeout) {
+    time = TIM5->CNT - start_time;
+    for (uint8_t i = 0; i < 6; ++i) {
+      if ((HAL_GPIO_ReadPin(gpio_buf[i], gpio_pin_buf[i]) == 0) && (time < sensor_buf[i])) {
+        sensor_buf[i] = time;
+      }
+    }
+  }
+  TIM5->CR1 = 0;
+  TIM5->CNT = 0;
+}
+
+uint16_t read_position(void) {
+  int on_line = 0;
+  uint32_t avg = 0;
+  uint16_t sum = 0;
+  read_reflectance_sensors();
+  for (uint8_t i = 0; i < 6; ++i) {
+    uint16_t val = sensor_buf[i];
+    if (val > 200) {
+      on_line = 1;
+    }
+    if (val > 50) {
+      avg += (uint32_t)val * (i * 1000);
+      sum += val;
+    }
+  }
+  if (on_line == 0) {
+    if (last_position_read < 2500) {
+      return 0;
+    }
+    else {
+      return 5000;
+    }
+  }
+  last_position_read = avg / sum - 200;
+  return last_position_read;
+}
+
+void follow_line_big_robot() {
+  /**
+   * PF14
+   * PE13
+   * PF15
+   * PD8
+   * PD9
+   * PE8
+   * */
+  int error = CENTER_POS - (int)read_position();
+
+  int left_motor_speed = BASE_SPEED;
+  int right_motor_speed = BASE_SPEED;
+
+  if (error > 400) {
+    turn_motors(712, 142, 'r');
+  }
+  else if (error < -400) {
+    turn_motors(142, 712, 'l');
+  }
+  if (error > 250) {
+    turn_motors(427, 142, 'r');
+  }
+  else if (error < -250) {
+    turn_motors(142, 427, 'l');
+  }
+  else {
+    if (error < -150) {
+      right_motor_speed += 142;
+      left_motor_speed -= 142;
+    }
+    else if (error > 150) {
+      left_motor_speed += 142;
+      right_motor_speed -= 142;
+    }
+    set_motors(left_motor_speed, right_motor_speed);
+  }
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -313,14 +464,16 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    /*
 	  GPIO_PinState button = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13);
 	  if (button == 1) {
 		  HAL_Delay(500);
 		  aimMode();
-	  }
+	  }*/
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
   }
   /* USER CODE END 3 */
 }
@@ -340,6 +493,7 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
@@ -352,6 +506,7 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+
   /** Initializes the CPU, AHB and APB buses clocks
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
@@ -395,12 +550,14 @@ static void MX_I2C1_Init(void)
   {
     Error_Handler();
   }
+
   /** Configure Analogue filter
   */
   if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
   {
     Error_Handler();
   }
+
   /** Configure Digital filter
   */
   if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK)
@@ -746,8 +903,17 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOF, GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8|GPIO_PIN_13, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_3|GPIO_PIN_4
                           |GPIO_PIN_5, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_8|GPIO_PIN_9, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : PE2 PE3 */
   GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3;
@@ -820,11 +986,25 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
+  /*Configure GPIO pins : PF14 PF15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_15;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
+
   /*Configure GPIO pin : PG0 */
   GPIO_InitStruct.Pin = GPIO_PIN_0;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PE8 PE13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB12 PB13 PB3 PB4
                            PB5 */
@@ -853,10 +1033,9 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pins : PD8 PD9 */
   GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF7_USART3;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PC6 */
@@ -968,4 +1147,3 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
-
